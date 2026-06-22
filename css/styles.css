@@ -632,6 +632,46 @@ h3 {
   line-height: 1.5;
 }
 
+.settings-player-list {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-player-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 42px;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-player-input {
+  height: 50px;
+}
+
+.settings-delete {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid rgba(224, 107, 98, 0.3);
+  border-radius: 13px;
+  color: #ffc2bd;
+  background: rgba(224, 107, 98, 0.09);
+  cursor: pointer;
+  font-size: 1.4rem;
+}
+
+.settings-add-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 112px;
+  gap: 10px;
+}
+
+.settings-add-button {
+  min-height: 54px;
+  padding-inline: 12px;
+}
+
 .winner-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

@@ -1,6 +1,20 @@
-const PLAYERS = ["Camilo", "Juan", "Andrés", "Pedro", "Mauricio"];
+const OLD_DEFAULT_PLAYERS = ["Camilo", "Juan", "Andrés", "Pedro", "Mauricio"];
+const DEFAULT_PLAYERS = [
+  "Kike",
+  "Indio",
+  "Mono",
+  "Caliche",
+  "Cuervo",
+  "Willie",
+  "Nash",
+  "Camish",
+  "Fish",
+  "Reina",
+];
 const STORAGE_KEY = "rummy-mompas-game-v1";
 const HISTORY_KEY = "rummy-mompas-history-v1";
+const PLAYERS_KEY = "rummy-mompas-players-v1";
+const LEGACY_PLAYERS_KEYS = ["rummy-mompas-players", "rummy-mompas-regular-players-v1"];
 
 const app = document.querySelector("#app");
 const toast = document.querySelector("#toast");
@@ -8,6 +22,7 @@ const toast = document.querySelector("#toast");
 let screen = "home";
 let game = loadGame();
 let history = loadHistory();
+let regularPlayers = loadRegularPlayers();
 let selectedHistoryId = null;
 let roundDraft = null;
 let toastTimer = null;
@@ -35,6 +50,40 @@ function loadHistory() {
   }
 }
 
+function loadRegularPlayers() {
+  try {
+    const storedValue =
+      localStorage.getItem(PLAYERS_KEY) ||
+      LEGACY_PLAYERS_KEYS.map((key) => localStorage.getItem(key)).find(Boolean);
+    const savedPlayers = JSON.parse(storedValue);
+    if (Array.isArray(savedPlayers) && savedPlayers.every((player) => typeof player === "string")) {
+      const cleanPlayers = savedPlayers
+        .map((player) => player.trim())
+        .filter(
+          (player, index, players) =>
+            player &&
+            players.findIndex(
+              (candidate) =>
+                candidate.toLocaleLowerCase("es") === player.toLocaleLowerCase("es"),
+            ) === index,
+        );
+      const isOldDefault =
+        cleanPlayers.length === OLD_DEFAULT_PLAYERS.length &&
+        OLD_DEFAULT_PLAYERS.every((player) => cleanPlayers.includes(player));
+      if (!isOldDefault) {
+        localStorage.setItem(PLAYERS_KEY, JSON.stringify(cleanPlayers));
+        return cleanPlayers;
+      }
+    }
+  } catch {
+    // Usa la nueva lista predeterminada si el dato guardado está dañado.
+  }
+
+  const migratedPlayers = [...DEFAULT_PLAYERS];
+  localStorage.setItem(PLAYERS_KEY, JSON.stringify(migratedPlayers));
+  return migratedPlayers;
+}
+
 function saveGame() {
   if (game) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(game));
@@ -45,6 +94,10 @@ function saveGame() {
 
 function saveHistory() {
   localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+}
+
+function saveRegularPlayers() {
+  localStorage.setItem(PLAYERS_KEY, JSON.stringify(regularPlayers));
 }
 
 function cloneGame(savedGame) {
@@ -482,6 +535,9 @@ function renderHome() {
         <button class="btn btn-secondary" type="button" data-action="view-history">
           Historial ${history.length ? `· ${history.length}` : ""}
         </button>
+        <button class="btn btn-secondary" type="button" data-action="view-settings">
+          Configuración
+        </button>
       </div>
     </section>
   `;
@@ -513,13 +569,13 @@ function renderCreateGame() {
           <span class="section-label">Jugadores</span>
           <p class="helper">Selecciona mínimo 2 jugadores.</p>
           <div class="player-picker">
-            ${PLAYERS.map(
+            ${regularPlayers.map(
               (player) => `
                 <label class="player-option">
-                  <input type="checkbox" name="players" value="${player}" checked />
+                  <input type="checkbox" name="players" value="${escapeHtml(player)}" checked />
                   <span class="checkmark">✓</span>
                   <span class="player-avatar">${initials(player)}</span>
-                  <span class="player-name">${player}</span>
+                  <span class="player-name">${escapeHtml(player)}</span>
                 </label>
               `,
             ).join("")}
@@ -548,6 +604,70 @@ function renderCreateGame() {
 
         <div class="sticky-action">
           <button class="btn btn-primary" type="submit">Crear partida</button>
+        </div>
+      </form>
+    </section>
+  `;
+}
+
+function renderSettings() {
+  return `
+    <section class="screen">
+      ${topbar("Configuración", "Administra los jugadores de cada nueva mesa")}
+
+      <div class="card">
+        <span class="section-label">Jugadores habituales</span>
+        <p class="helper">Los cambios se usarán al crear la próxima partida.</p>
+
+        ${
+          regularPlayers.length
+            ? `
+              <form id="regular-players-form" class="settings-player-list">
+                ${regularPlayers
+                  .map(
+                    (player, index) => `
+                      <div class="settings-player-row">
+                        <span class="player-avatar">${initials(player)}</span>
+                        <input
+                          class="text-input settings-player-input"
+                          name="regularPlayer"
+                          type="text"
+                          maxlength="30"
+                          value="${escapeHtml(player)}"
+                          aria-label="Nombre de ${escapeHtml(player)}"
+                          required
+                        />
+                        <button
+                          class="settings-delete"
+                          type="button"
+                          data-action="delete-regular-player"
+                          data-player-index="${index}"
+                          aria-label="Eliminar ${escapeHtml(player)}"
+                        >×</button>
+                      </div>
+                    `,
+                  )
+                  .join("")}
+                <button class="btn btn-secondary" type="submit">Guardar cambios</button>
+              </form>
+            `
+            : `<div class="empty-state">No hay jugadores habituales configurados.</div>`
+        }
+      </div>
+
+      <form id="add-player-form" class="card">
+        <span class="section-label">Agregar jugador</span>
+        <div class="settings-add-row">
+          <input
+            class="text-input"
+            name="playerName"
+            type="text"
+            maxlength="30"
+            placeholder="Nombre"
+            aria-label="Nombre del nuevo jugador"
+            required
+          />
+          <button class="btn btn-primary settings-add-button" type="submit">Agregar</button>
         </div>
       </form>
     </section>
@@ -600,7 +720,7 @@ function renderGame() {
                     <td>
                       <span class="score-player">
                         <span class="mini-avatar">${initials(player)}</span>
-                        ${player}
+                        ${escapeHtml(player)}
                       </span>
                     </td>
                     <td class="wins-value">${totals[player].wins}</td>
@@ -626,11 +746,11 @@ function renderGame() {
                       <div class="round-row">
                         <div>
                           <div class="round-label">Ronda ${game.rounds.length - index}</div>
-                          <div class="round-winner">🏆 ${round.winner}</div>
+                          <div class="round-winner">🏆 ${escapeHtml(round.winner)}</div>
                         </div>
                         <div class="round-label">${game.players
                           .filter((player) => player !== round.winner)
-                          .map((player) => `${player} ${round.points[player]}`)
+                          .map((player) => `${escapeHtml(player)} ${round.points[player]}`)
                           .join(" · ")}</div>
                       </div>
                     `,
@@ -669,14 +789,14 @@ function renderRound() {
         <div class="winner-grid">
           ${game.players
             .map(
-              (player) => `
+              (player, index) => `
                 <button
                   class="winner-option ${roundDraft.winner === player ? "selected" : ""}"
                   type="button"
                   data-action="select-winner"
-                  data-player="${player}"
+                  data-player-index="${index}"
                 >
-                  ${roundDraft.winner === player ? "🏆 " : ""}${player}
+                  ${roundDraft.winner === player ? "🏆 " : ""}${escapeHtml(player)}
                 </button>
               `,
             )
@@ -690,17 +810,18 @@ function renderRound() {
           <p class="helper">El ganador queda en 0. Ingresa los puntos de los demás.</p>
           <div class="points-form">
             ${game.players
-              .map((player) => {
+              .map((player, index) => {
                 const isWinner = roundDraft.winner === player;
                 return `
                   <div class="points-entry">
-                    <label for="points-${player}">
-                      ${player}
+                    <label for="points-${index}">
+                      ${escapeHtml(player)}
                       ${isWinner ? `<div class="winner-zero">Ganador</div>` : ""}
                     </label>
                     <input
-                      id="points-${player}"
-                      name="${player}"
+                      id="points-${index}"
+                      name="points-${index}"
+                      data-player-index="${index}"
                       type="number"
                       inputmode="numeric"
                       min="0"
@@ -709,7 +830,7 @@ function renderRound() {
                       value="${isWinner ? "0" : roundDraft.points[player]}"
                       ${isWinner ? "disabled" : ""}
                       ${roundDraft.winner && !isWinner ? "required" : ""}
-                      aria-label="Puntos de ${player}"
+                      aria-label="Puntos de ${escapeHtml(player)}"
                     />
                   </div>
                 `;
@@ -832,7 +953,7 @@ function renderHistory() {
                       <div class="history-result">
                         <div>
                           <small>Mejor resultado</small>
-                          <strong>🏆 ${best.player}</strong>
+                          <strong>🏆 ${escapeHtml(best.player)}</strong>
                         </div>
                         <div class="history-balance">
                           <small>Saldo principal</small>
@@ -886,9 +1007,9 @@ function renderResults() {
                     (payment) => `
                       <article class="payment">
                         <div class="payment-route">
-                          <span>${payment.from}</span>
+                          <span>${escapeHtml(payment.from)}</span>
                           <span class="payment-arrow">→</span>
-                          <span>${payment.to}</span>
+                          <span>${escapeHtml(payment.to)}</span>
                         </div>
                         <div class="payment-values">
                           <div>
@@ -917,7 +1038,7 @@ function renderResults() {
             .map(
               (player) => `
                 <div class="balance-row">
-                  <span>${player}</span>
+                  <span>${escapeHtml(player)}</span>
                   <span class="${balances[player] >= 0 ? "balance-positive" : "balance-negative"}">
                     ${balances[player] > 0 ? "+" : ""}${formatMoney(balances[player])}
                   </span>
@@ -944,7 +1065,7 @@ function renderResults() {
                 .map(
                   (player) => `
                     <tr>
-                      <td>${player}</td>
+                      <td>${escapeHtml(player)}</td>
                       <td class="wins-value">${totals[player].wins}</td>
                       <td>${formatNumber(totals[player].points)}</td>
                     </tr>
@@ -970,11 +1091,11 @@ function renderResults() {
               return `
                 <div class="audit-row">
                   <div class="audit-copy">
-                    <strong>${item.playerA} vs. ${item.playerB}</strong>
+                    <strong>${escapeHtml(item.playerA)} vs. ${escapeHtml(item.playerB)}</strong>
                     <small>
                       Rondas: ${formatMoney(item.roundsAmount)} ·
                       Puntos: ${formatMoney(item.pointsAmount)}<br />
-                      ${winner}
+                      ${escapeHtml(winner)}
                     </small>
                   </div>
                   <div class="audit-amount">${formatMoney(Math.abs(item.netForA))}</div>
@@ -1007,6 +1128,7 @@ function render() {
     game: renderGame,
     round: renderRound,
     history: renderHistory,
+    settings: renderSettings,
     results: renderResults,
   };
 
@@ -1059,13 +1181,13 @@ function saveRound(form) {
   const formData = new FormData(form);
   const points = {};
 
-  for (const player of game.players) {
+  for (const [index, player] of game.players.entries()) {
     if (player === roundDraft.winner) {
       points[player] = 0;
       continue;
     }
 
-    const rawValue = formData.get(player);
+    const rawValue = formData.get(`points-${index}`);
     const value = Number(rawValue);
     if (rawValue === null || rawValue === "" || !Number.isInteger(value) || value < 0) {
       showToast(`Ingresa los puntos de ${player}.`);
@@ -1114,6 +1236,7 @@ app.addEventListener("click", async (event) => {
     selectedHistoryId = null;
     goTo("history");
   }
+  if (action === "view-settings") goTo("settings");
   if (action === "open-history-game") {
     selectedHistoryId = button.dataset.gameId;
     goTo("results");
@@ -1127,16 +1250,24 @@ app.addEventListener("click", async (event) => {
   if (action === "select-winner") {
     const form = document.querySelector("#round-form");
     if (form && roundDraft) {
-      game.players.forEach((player) => {
-        const input = form.elements[player];
+      game.players.forEach((player, index) => {
+        const input = form.elements[`points-${index}`];
         if (input && player !== roundDraft.winner) {
           roundDraft.points[player] = input.value;
         }
       });
     }
-    roundDraft.winner = button.dataset.player;
+    roundDraft.winner = game.players[Number(button.dataset.playerIndex)];
     roundDraft.points[roundDraft.winner] = 0;
     render();
+  }
+
+  if (action === "delete-regular-player") {
+    const index = Number(button.dataset.playerIndex);
+    regularPlayers.splice(index, 1);
+    saveRegularPlayers();
+    render();
+    showToast("Jugador eliminado.");
   }
 
   if (action === "finish-game") {
@@ -1171,11 +1302,53 @@ app.addEventListener("submit", (event) => {
   if (event.target.id === "round-form") {
     saveRound(event.target);
   }
+
+  if (event.target.id === "regular-players-form") {
+    const formData = new FormData(event.target);
+    const editedPlayers = formData
+      .getAll("regularPlayer")
+      .map((player) => String(player).trim())
+      .filter(Boolean);
+    const uniqueNames = new Set(editedPlayers.map((player) => player.toLocaleLowerCase("es")));
+
+    if (uniqueNames.size !== editedPlayers.length) {
+      showToast("No puede haber jugadores con el mismo nombre.");
+      return;
+    }
+
+    regularPlayers = editedPlayers;
+    saveRegularPlayers();
+    render();
+    showToast("Jugadores actualizados.");
+  }
+
+  if (event.target.id === "add-player-form") {
+    const formData = new FormData(event.target);
+    const playerName = String(formData.get("playerName") || "").trim();
+    const alreadyExists = regularPlayers.some(
+      (player) => player.toLocaleLowerCase("es") === playerName.toLocaleLowerCase("es"),
+    );
+
+    if (!playerName) {
+      showToast("Escribe el nombre del jugador.");
+      return;
+    }
+    if (alreadyExists) {
+      showToast("Ese jugador ya está en la lista.");
+      return;
+    }
+
+    regularPlayers.push(playerName);
+    saveRegularPlayers();
+    render();
+    showToast("Jugador agregado.");
+  }
 });
 
 app.addEventListener("input", (event) => {
   if (screen !== "round" || !roundDraft || event.target.type !== "number") return;
-  roundDraft.points[event.target.name] = event.target.value;
+  const player = game.players[Number(event.target.dataset.playerIndex)];
+  roundDraft.points[player] = event.target.value;
 });
 
 render();
