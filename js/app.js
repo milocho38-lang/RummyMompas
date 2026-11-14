@@ -195,14 +195,7 @@ function fitCanvasText(context, text, maxWidth) {
 
 function createResultCanvas(resultGame) {
   const { totals, balances, payments } = calculateSettlement(resultGame);
-  const positions = resultGame.players
-    .map((player) => ({
-      player,
-      wins: totals[player].wins,
-      points: totals[player].points,
-      balance: balances[player],
-    }))
-    .sort((a, b) => b.balance - a.balance || b.wins - a.wins || a.points - b.points);
+  const positions = getStandings(resultGame);
 
   const winner = positions[0];
   const width = 1080;
@@ -326,7 +319,7 @@ function createResultCanvas(resultGame) {
     context.textAlign = "left";
     context.fillStyle = index === 0 ? colors.goldLight : colors.white;
     context.font = '800 26px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-    context.fillText(`${index + 1}`, 92, rowY + 40);
+    context.fillText(`${position.rank}`, 92, rowY + 40);
     context.fillText(fitCanvasText(context, position.player, 360), 145, rowY + 40);
 
     context.textAlign = "center";
@@ -690,8 +683,22 @@ function getTotals(targetGame = game) {
   return totals;
 }
 
+// Shared official standings. Sort copies only: player indices used by round entry stay unchanged.
+function getStandings(targetGame = game) {
+  const { totals, balances } = calculateSettlement(targetGame);
+  const rows = targetGame.players.map(player => ({ player, balance: balances[player], ...totals[player] }))
+    .sort((a, b) => b.balance - a.balance || b.wins - a.wins || a.points - b.points);
+  let rank = 1;
+  return rows.map((row, index) => {
+    const previous = rows[index - 1];
+    if (previous && (row.balance !== previous.balance || row.wins !== previous.wins || row.points !== previous.points)) rank = index + 1;
+    return { ...row, rank };
+  });
+}
+
 function renderGame() {
   const totals = getTotals();
+  const orderedPlayers = getStandings().map(row => row.player);
 
   return `
     <section class="screen">
@@ -705,6 +712,7 @@ function renderGame() {
 
       <div class="card">
         <span class="section-label">Marcador</span>
+        <p class="helper">De primero a último: saldo exacto, ganadas y menos puntos.</p>
         <table class="score-table">
           <thead>
             <tr>
@@ -714,7 +722,7 @@ function renderGame() {
             </tr>
           </thead>
           <tbody>
-            ${game.players
+            ${orderedPlayers
               .map(
                 (player) => `
                   <tr>
@@ -922,8 +930,7 @@ function getSelectedFinishedGame() {
 }
 
 function getBestResult(targetGame) {
-  const { balances } = calculateSettlement(targetGame);
-  const [player, balance] = Object.entries(balances).sort((a, b) => b[1] - a[1])[0];
+  const { player, balance } = getStandings(targetGame)[0];
   return { player, balance };
 }
 
@@ -945,21 +952,17 @@ function historicalStats(games) {
     if (savedGame.id != null && seen.has(String(savedGame.id))) continue;
     if (savedGame.id != null) seen.add(String(savedGame.id));
     const { totals, balances, payments } = calculateSettlement(savedGame);
-    const positions = savedGame.players.map(player => ({ player, balance: balances[player], ...totals[player] }))
-      .sort((a, b) => b.balance - a.balance || b.wins - a.wins || a.points - b.points);
+    const positions = getStandings(savedGame);
     const mompas = new Map(savedGame.players.map(player => [player, 0]));
     payments.forEach(payment => {
       mompas.set(payment.from, mompas.get(payment.from) - payment.rounded);
       mompas.set(payment.to, mompas.get(payment.to) + payment.rounded);
     });
-    let rank = 1;
-    positions.forEach((position, index) => {
-      const previous = positions[index - 1];
-      if (previous && (position.balance !== previous.balance || position.wins !== previous.wins || position.points !== previous.points)) rank = index + 1;
+    positions.forEach(position => {
       const key = position.player.trim().toLocaleLowerCase("es");
       const row = players.get(key) || { player: position.player.trim(), games: 0, positionSum: 0, exact: 0, mompas: 0 };
       row.games += 1;
-      row.positionSum += rank;
+      row.positionSum += position.rank;
       row.exact += position.balance;
       row.mompas += mompas.get(position.player);
       players.set(key, row);
@@ -968,10 +971,58 @@ function historicalStats(games) {
   return [...players.values()].map(row => ({ ...row, average: row.positionSum / row.games }));
 }
 
+// Each point is the cumulative ranking after a completed game in this period.
+function historyRankingSeries(games) {
+  const seen = new Set();
+  const dated = games.filter(saved => {
+    const stamp = Date.parse(saved.finishedAt || saved.createdAt);
+    if (!saved.finished || !saved.players?.length || !saved.rounds?.length || !Number.isFinite(stamp)) return false;
+    if (saved.id != null && seen.has(String(saved.id))) return false;
+    if (saved.id != null) seen.add(String(saved.id));
+    return true;
+  }).map((saved, index) => ({ saved, index, stamp: Date.parse(saved.finishedAt || saved.createdAt) }))
+    .sort((a,b) => a.stamp - b.stamp || a.index - b.index).map(item => item.saved);
+  const series = new Map();
+  const prefix = [];
+  dated.forEach((saved,index) => {
+    prefix.push(saved);
+    const stats = historicalStats(prefix);
+    stats.forEach(row => {
+      const key = row.player.trim().toLocaleLowerCase('es');
+      if (!series.has(key)) series.set(key, {key,player:row.player,points:[]});
+      series.get(key).points.push({index,
+        averageRank:1+stats.filter(other=>other.average < row.average).length,
+        moneyRank:1+stats.filter(other=>other.mompas > row.mompas).length});
+    });
+  });
+  return { games:dated, players:[...series.values()] };
+}
+
+function renderRankingChart(data, metric, title) {
+  if (!data.games.length) return `<div class="card"><h3>${title}</h3><p class="helper">No hay partidas finalizadas con fecha válida en este periodo.</p></div>`;
+  const width=Math.max(340,data.games.length*58+70),height=250,left=38,right=20,top=24,bottom=48;
+  const maxRank=Math.max(1,data.players.length);
+  const x=index=>left+(data.games.length===1? (width-left-right)/2 : index*(width-left-right)/(data.games.length-1));
+  const y=rank=>top+(rank-1)*(height-top-bottom)/Math.max(1,maxRank-1);
+  // Names map to stable colors across period filters; the legend and point titles identify every line.
+  const allNames=[...new Set(history.flatMap(saved=>saved.players||[]).map(name=>name.trim().toLocaleLowerCase('es')))].sort();
+  const color=key=>`hsl(${(allNames.indexOf(key)*137.508+38)%360} 72% 67%)`;
+  const lines=data.players.map(player=>`<polyline fill="none" stroke="${color(player.key)}" stroke-width="2.5" points="${player.points.map(point=>`${x(point.index)},${y(point[metric])}`).join(' ')}"/>${player.points.map(point=>`<circle cx="${x(point.index)}" cy="${y(point[metric])}" r="4" fill="${color(player.key)}"><title>${escapeHtml(player.player)} · Partida ${point.index+1} · Puesto ${point[metric]}</title></circle>`).join('')}`).join('');
+  return `<div class="card"><h3>${title}</h3><p class="helper">Puesto en el ranking acumulado; 1 es el mejor. Cada punto representa una partida terminada.</p>
+    <div class="ranking-chart-scroll" tabindex="0" aria-label="Gráfica desplazable: ${title}"><svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" role="img" aria-label="${title}: evolución de puestos acumulados"><g font-family="system-ui" font-size="11" fill="currentColor">
+    ${Array.from({length:maxRank},(_,i)=>`<line x1="${left}" x2="${width-right}" y1="${y(i+1)}" y2="${y(i+1)}" stroke="currentColor" opacity="0.16"/><text x="8" y="${y(i+1)+4}">${i+1}º</text>`).join('')}
+    ${data.games.map((saved,index)=>`<text x="${x(index)}" y="${height-24}" text-anchor="middle">${index+1}</text>`).join('')}
+    <text x="${width/2}" y="${height-6}" text-anchor="middle">Partidas en orden cronológico</text>${lines}</g></svg></div>
+    <div class="ranking-chart-legend">${data.players.map(player=>`<span><i style="background:${color(player.key)}"></i>${escapeHtml(player.player)}</span>`).join('')}</div>
+    <details><summary>Ver fechas y puestos</summary><div class="ranking-chart-scroll"><table class="chart-data-table score-table"><thead><tr><th>Partida / fecha</th>${data.players.map(p=>`<th>${escapeHtml(p.player)}</th>`).join('')}</tr></thead><tbody>${data.games.map((saved,index)=>`<tr><td>${index+1} · ${formatDate(saved.finishedAt||saved.createdAt)}</td>${data.players.map(p=>`<td>${p.points.find(point=>point.index===index)?.[metric]??'—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div></details>
+  </div>`;
+}
+
 function renderHistory() {
   const years = [...new Set(history.map(historyGameYear).filter(Boolean))].sort().reverse();
   const filteredHistory = historyYear === "all" ? history : history.filter(savedGame => historyGameYear(savedGame) === historyYear);
   const stats = historicalStats(filteredHistory);
+  const rankingSeries = historyRankingSeries(filteredHistory);
   const positionRows = [...stats].sort((a, b) => a.average - b.average || b.games - a.games || a.player.localeCompare(b.player, "es"));
   const moneyRows = [...stats].sort((a, b) => b.mompas - a.mompas || a.player.localeCompare(b.player, "es"));
   const signedMoney = value => `${value > 0 ? "+" : ""}${formatMoney(value)}`;
@@ -1001,6 +1052,10 @@ function renderHistory() {
         ${moneyRows.map(row => `<tr><td>${escapeHtml(row.player)}</td><td>${row.games}</td><td class="${row.mompas >= 0 ? "balance-positive" : "balance-negative"}">${signedMoney(row.mompas)}</td></tr>`).join("")}
         </tbody></table>
       </div>` : ""}
+
+      <p class="helper history-chart-note">Las gráficas reinician el acumulado al elegir un año. Cada jugador aparece desde su primera partida; si no participa después, conserva su acumulado pero su puesto puede cambiar. Los empates comparten puesto (1, 1, 3). Las partidas sin fecha válida se omiten de las gráficas.</p>
+      ${renderRankingChart(rankingSeries, "averageRank", "Evolución del ranking de posiciones")}
+      ${renderRankingChart(rankingSeries, "moneyRank", "Evolución del ranking de dinero")}
 
       ${
         filteredHistory.length
@@ -1056,6 +1111,7 @@ function renderResults() {
   const resultGame = getSelectedFinishedGame();
   if (!resultGame) return renderHome();
   const { totals, balances, audit, payments } = calculateSettlement(resultGame);
+  const orderedPlayers = getStandings(resultGame).map(row => row.player);
 
   return `
     <section class="screen">
@@ -1105,7 +1161,7 @@ function renderResults() {
       <details class="card">
         <summary>Balances exactos</summary>
         <div class="details-content balance-list">
-          ${resultGame.players
+          ${orderedPlayers
             .map(
               (player) => `
                 <div class="balance-row">
@@ -1132,7 +1188,7 @@ function renderResults() {
               </tr>
             </thead>
             <tbody>
-              ${resultGame.players
+              ${orderedPlayers
                 .map(
                   (player) => `
                     <tr>

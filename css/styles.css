@@ -965,3 +965,10 @@ select.text-input { color: var(--cream); background: var(--green-900); width: 10
 
 .card + .history-list { margin-top: 14px; }
 #history-year + .helper { margin-top: 10px; }
+
+.ranking-chart-scroll { overflow-x: auto; max-width: 100%; color: var(--muted); }
+.ranking-chart-scroll svg { display: block; }
+.ranking-chart-legend { display:flex; flex-wrap:wrap; gap:10px 16px; margin:10px 0; font-size:.8rem; }
+.ranking-chart-legend span { display:inline-flex; align-items:center; gap:6px; }
+.ranking-chart-legend i { width:10px; height:10px; border-radius:50%; flex:none; }
+.history-chart-note { margin:18px 0; }
