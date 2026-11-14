@@ -958,3 +958,10 @@ details[open] summary::after {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Historical summaries keep the existing compact mobile layout. */
+select.text-input { color: var(--cream); background: var(--green-900); width: 100%; font: inherit; }
+.score-table td:first-child { overflow-wrap: anywhere; }
+
+.card + .history-list { margin-top: 14px; }
+#history-year + .helper { margin-top: 10px; }

@@ -24,6 +24,7 @@ let game = loadGame();
 let history = loadHistory();
 let regularPlayers = loadRegularPlayers();
 let selectedHistoryId = null;
+let historyYear = "all";
 let roundDraft = null;
 let toastTimer = null;
 
@@ -926,15 +927,85 @@ function getBestResult(targetGame) {
   return { player, balance };
 }
 
+function historyGameYear(savedGame) {
+  const value = savedGame.finishedAt || savedGame.createdAt;
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat("en", { year: "numeric", timeZone: "America/Bogota" }).format(date);
+}
+
+// Read-only aggregation: no migration or replacement of saved games.
+function historicalStats(games) {
+  const players = new Map();
+  const seen = new Set();
+  for (const savedGame of games) {
+    if (!savedGame?.finished || !Array.isArray(savedGame.players) ||
+        !savedGame.players.length || !Array.isArray(savedGame.rounds) || !savedGame.rounds.length) continue;
+    if (savedGame.id != null && seen.has(String(savedGame.id))) continue;
+    if (savedGame.id != null) seen.add(String(savedGame.id));
+    const { totals, balances, payments } = calculateSettlement(savedGame);
+    const positions = savedGame.players.map(player => ({ player, balance: balances[player], ...totals[player] }))
+      .sort((a, b) => b.balance - a.balance || b.wins - a.wins || a.points - b.points);
+    const mompas = new Map(savedGame.players.map(player => [player, 0]));
+    payments.forEach(payment => {
+      mompas.set(payment.from, mompas.get(payment.from) - payment.rounded);
+      mompas.set(payment.to, mompas.get(payment.to) + payment.rounded);
+    });
+    let rank = 1;
+    positions.forEach((position, index) => {
+      const previous = positions[index - 1];
+      if (previous && (position.balance !== previous.balance || position.wins !== previous.wins || position.points !== previous.points)) rank = index + 1;
+      const key = position.player.trim().toLocaleLowerCase("es");
+      const row = players.get(key) || { player: position.player.trim(), games: 0, positionSum: 0, exact: 0, mompas: 0 };
+      row.games += 1;
+      row.positionSum += rank;
+      row.exact += position.balance;
+      row.mompas += mompas.get(position.player);
+      players.set(key, row);
+    });
+  }
+  return [...players.values()].map(row => ({ ...row, average: row.positionSum / row.games }));
+}
+
 function renderHistory() {
+  const years = [...new Set(history.map(historyGameYear).filter(Boolean))].sort().reverse();
+  const filteredHistory = historyYear === "all" ? history : history.filter(savedGame => historyGameYear(savedGame) === historyYear);
+  const stats = historicalStats(filteredHistory);
+  const positionRows = [...stats].sort((a, b) => a.average - b.average || b.games - a.games || a.player.localeCompare(b.player, "es"));
+  const moneyRows = [...stats].sort((a, b) => b.mompas - a.mompas || a.player.localeCompare(b.player, "es"));
+  const signedMoney = value => `${value > 0 ? "+" : ""}${formatMoney(value)}`;
   return `
     <section class="screen">
-      ${topbar("Historial", `${history.length} ${history.length === 1 ? "partida guardada" : "partidas guardadas"}`)}
+      ${topbar("Historial", `${filteredHistory.length} partidas · ${historyYear === "all" ? "General" : historyYear}`)}
+      <div class="card">
+        <label class="section-label" for="history-year">Periodo</label>
+        <select id="history-year" class="text-input">
+          <option value="all" ${historyYear === "all" ? "selected" : ""}>General · todos los años</option>
+          ${years.map(year => `<option value="${year}" ${historyYear === year ? "selected" : ""}>${year}</option>`).join("")}
+        </select>
+        <p class="helper">Solo partidas finalizadas guardadas en este navegador. No se sincronizan entre dispositivos. Año según la fecha de finalización en Colombia.</p>
+      </div>
+      ${stats.length ? `
+      <div class="card">
+        <h3>Promedio de posiciones</h3>
+        <p class="helper">Menor promedio es mejor. Orden de cada partida: saldo exacto, rondas ganadas y puntos. Empates completos comparten posición (1, 1, 3).</p>
+        <table class="score-table"><thead><tr><th>Jugador</th><th>Partidas<br>jugadas</th><th>Promedio</th></tr></thead><tbody>
+        ${positionRows.map(row => `<tr><td>${escapeHtml(row.player)}</td><td>${row.games}</td><td>${row.average.toLocaleString("es-CO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td></tr>`).join("")}
+        </tbody></table>
+      </div>
+      <div class="card">
+        <h3>Dinero ganado o perdido</h3>
+        <p class="helper">Saldo Mompas: suma neta de los pagos finales redondeados a $1.000. Son liquidaciones calculadas, no confirmación de pagos realizados.</p>
+        <table class="score-table"><thead><tr><th>Jugador</th><th>Partidas<br>jugadas</th><th>Saldo neto</th></tr></thead><tbody>
+        ${moneyRows.map(row => `<tr><td>${escapeHtml(row.player)}</td><td>${row.games}</td><td class="${row.mompas >= 0 ? "balance-positive" : "balance-negative"}">${signedMoney(row.mompas)}</td></tr>`).join("")}
+        </tbody></table>
+      </div>` : ""}
 
       ${
-        history.length
+        filteredHistory.length
           ? `<div class="history-list">
-              ${history
+              ${filteredHistory
                 .map((savedGame) => {
                   const best = getBestResult(savedGame);
                   return `
@@ -1342,6 +1413,13 @@ app.addEventListener("submit", (event) => {
     saveRegularPlayers();
     render();
     showToast("Jugador agregado.");
+  }
+});
+
+app.addEventListener("change", (event) => {
+  if (event.target.id === "history-year") {
+    historyYear = event.target.value;
+    render();
   }
 });
 
